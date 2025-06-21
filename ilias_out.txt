@@ -1,0 +1,300 @@
+import glob
+
+def convert_rating_to_label(rating):
+    # Convert to 0-100 scale for cleaner integer comparisons
+    rating_int = int(rating * 100)
+    if rating_int >= 70:
+        return "positive"
+    elif rating_int <= 30:
+        return "negative"
+    else:
+        return "neutral"
+
+#df['label'] = df['rating'].apply(convert_rating_to_label)
+
+def document_to_vector(text, model, num_features):
+    words = text.split()
+    #initialize a zero vector for the document.
+    feature_vec = np.zeros((num_features,), dtype="float32")
+    n_words = 0
+    for word in words:
+        if word in model:
+            n_words += 1
+            feature_vec = np.add(feature_vec, model[word])
+    #avoid division by zero if no words from the document were found in the model
+    if n_words > 0:
+        feature_vec = np.divide(feature_vec, n_words)
+
+    return feature_vec
+
+# whole_df=csv_dict["Software_reviews.csv"]
+# whole_df = pd.read_csv(f"{save_path}Software_reviews.csv")
+# sent_df = pd.read_csv(f"{save_path}Software_sentiment_score.csv")
+# Append sentiment scores from multiple categories (take 10k from each)
+dfs = []
+sent_dfs = []
+CATEGORIES = [
+    'All_Beauty',
+    'Software',
+    'Appliances',
+    'Digital_Music'
+]
+MAX_ROWS_PER_CATEGORY = 10000  # Max rows to process per category
+save_path = "TEDE/"
+for cat in CATEGORIES:
+    df_cat = pd.read_csv(f"{save_path}{cat}_reviews.csv", nrows=MAX_ROWS_PER_CATEGORY)
+    sent_cat = pd.read_csv(f"{save_path}{cat}_sentiment_score.csv", nrows=MAX_ROWS_PER_CATEGORY)
+    dfs.append(df_cat)
+    sent_dfs.append(sent_cat)
+whole_df = pd.concat(dfs, ignore_index=True)
+sent_df = pd.concat(sent_dfs, ignore_index=True)
+# only keep relevant fields if needed, e.g. sent_df = sent_df[['text', 'final_sentiment_score']]
+# df = whole_df[['title', 'text', 'rating']].copy()
+df = whole_df[['text', 'rating']].copy()
+df['label'] = sent_df['final_sentiment_score'].apply(convert_rating_to_label)
+# print(f"Total rows in whole_df: {len(df)}")
+# print(df.head(10))
+# import sys
+# sys.exit(0) #exit the program if you want to stop here, otherwise comment this line out
+# display(df.head(10))
+# import sys
+# sys.exit(0) #exit the program if you want to stop here, otherwise comment this line out
+#print how many have null rating, just to check
+print("Null columns:",df.isnull().sum())
+#drop any entries with empty fields
+df.dropna(inplace=True)
+
+#apply preprocessing to text
+# df['title'] = df['title'].apply(preprocess_text)
+df['text'] = df['text'].apply(preprocess_text)
+
+
+
+#split ds to train and test
+X=df['text']
+Y=df['label']
+#better to use a numerically encoded version instead of strings
+Y_encoded = label_encoder.fit_transform(Y)
+X_train_text, X_test_text, Y_train, Y_test = train_test_split(
+    X,
+    Y_encoded,
+    test_size=0.2,
+    random_state=42,
+    stratify=Y_encoded
+)
+
+
+#declare 10-fold
+k_fold = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)
+#define metrics we're interested in
+scoring_metrics = ['accuracy', 'precision_macro', 'recall_macro', 'f1_macro']
+
+#list to present final results
+cross_table=[]
+
+#gather all results to present them for the second table
+second_table=[]
+
+#=============================== TF-IDF ====================================
+
+tfidf_vectorizer = TfidfVectorizer(
+    max_features=5000,
+    ngram_range=(1, 2)
+)
+
+#fit the vectorizer ONLY on the training data
+tfidf_vectorizer.fit(X_train_text)
+
+#apply that to both sets
+X_train_tfidf = tfidf_vectorizer.transform(X_train_text)
+X_test_tfidf = tfidf_vectorizer.transform(X_test_text)
+
+
+# Naive Bayes
+nb_model = MultinomialNB()
+nb_model.fit(X_train_tfidf, Y_train)
+y_pred_nb_tfidf = nb_model.predict(X_test_tfidf)
+print("Naive-Bayes with TF-IDF")
+print(classification_report(Y_test, y_pred_nb_tfidf, target_names=label_encoder.classes_))
+result=cross_validate(nb_model, X_train_tfidf, Y_train, cv=k_fold, scoring=scoring_metrics)
+
+#store the average results in a list
+cross_table.append(
+    {
+        'Feature Set': 'TF-IDF',
+        'Model': 'Naive Bayes',
+        'Accuracy': np.mean(result['test_accuracy']),
+        'Precision': np.mean(result['test_precision_macro']),
+        'Recall': np.mean(result['test_recall_macro']),
+        'F1-Score': np.mean(result['test_f1_macro'])
+    }
+)
+
+second_table.append(
+    {
+    'Feature Set': 'TF-IDF',
+    'Model': 'Naive Bayes',
+    'Accuracy': accuracy_score(Y_test, y_pred_nb_tfidf),
+    'Precision': precision_score(Y_test, y_pred_nb_tfidf, average='macro',zero_division=0),
+    'Recall': recall_score(Y_test, y_pred_nb_tfidf, average='macro',zero_division=0),
+    'F1-Score': f1_score(Y_test, y_pred_nb_tfidf, average='macro',zero_division=0)
+    }
+)
+
+
+# KNN
+knn_model = KNeighborsClassifier(n_neighbors=5)
+knn_model.fit(X_train_tfidf, Y_train)
+y_pred_knn_tfidf = knn_model.predict(X_test_tfidf)
+print("KNN with TF-IDF")
+print(classification_report(Y_test, y_pred_knn_tfidf, target_names=label_encoder.classes_))
+result=cross_validate(knn_model, X_train_tfidf, Y_train, cv=k_fold, scoring=scoring_metrics)
+cross_table.append(
+    {
+        'Feature Set': 'TF-IDF',
+        'Model': 'KNN',
+        'Accuracy': np.mean(result['test_accuracy']),
+        'Precision': np.mean(result['test_precision_macro']),
+        'Recall': np.mean(result['test_recall_macro']),
+        'F1-Score': np.mean(result['test_f1_macro'])
+    }
+)
+second_table.append({
+    'Feature Set': 'TF-IDF',
+    'Model': 'KNN',
+    'Accuracy': accuracy_score(Y_test, y_pred_knn_tfidf),
+    'Precision': precision_score(Y_test, y_pred_knn_tfidf, average='macro',zero_division=0),
+    'Recall': recall_score(Y_test, y_pred_knn_tfidf, average='macro',zero_division=0),
+    'F1-Score': f1_score(Y_test, y_pred_knn_tfidf, average='macro',zero_division=0)
+})
+
+# Random Forest                                                       #uses all cores to run faster
+rf_model = RandomForestClassifier(n_estimators=100, random_state=42,n_jobs=-1 )
+rf_model.fit(X_train_tfidf, Y_train)
+y_pred_rf_tfidf = rf_model.predict(X_test_tfidf)
+print("Random Forest with TF-IDF")
+print(classification_report(Y_test, y_pred_rf_tfidf, target_names=label_encoder.classes_))
+result=cross_validate(rf_model, X_train_tfidf, Y_train, cv=k_fold, scoring=scoring_metrics)
+cross_table.append(
+    {
+        'Feature Set': 'TF-IDF',
+        'Model': 'Random Forest',
+        'Accuracy': np.mean(result['test_accuracy']),
+        'Precision': np.mean(result['test_precision_macro']),
+        'Recall': np.mean(result['test_recall_macro']),
+        'F1-Score': np.mean(result['test_f1_macro'])
+    }
+)
+second_table.append({
+    'Feature Set': 'TF-IDF',
+    'Model': 'Random Forest',
+    'Accuracy': accuracy_score(Y_test, y_pred_rf_tfidf),
+    'Precision': precision_score(Y_test, y_pred_rf_tfidf, average='macro',zero_division=0),
+    'Recall': recall_score(Y_test, y_pred_rf_tfidf, average='macro',zero_division=0),
+    'F1-Score': f1_score(Y_test, y_pred_rf_tfidf, average='macro',zero_division=0)
+})
+
+
+#=============================== Embeddings ====================================
+
+
+#load embedding model
+#option1: word2vec
+# model_name = 'word2vec-google-news-300'
+#option 2:fasttext,often a good choice due to OOV handling
+model_name = 'fasttext-wiki-news-subwords-300'
+
+embedding_model = api.load(model_name)
+embedding_dim = embedding_model.vector_size
+
+
+
+# apply the embedding to the sets
+X_train_embeddings = np.array([document_to_vector(doc, embedding_model, embedding_dim) for doc in X_train_text])
+X_test_embeddings = np.array([document_to_vector(doc, embedding_model, embedding_dim) for doc in X_test_text])
+
+
+#(Gaussian) Naive Bayes
+gnb_model = GaussianNB()
+gnb_model.fit(X_train_embeddings, Y_train)
+y_pred_gnb = gnb_model.predict(X_test_embeddings)
+print("Naive Bayes with Word Embeddings")
+print(classification_report(Y_test, y_pred_gnb, target_names=label_encoder.classes_))
+result=cross_validate(gnb_model, X_train_embeddings, Y_train, cv=k_fold, scoring=scoring_metrics)
+cross_table.append(
+    {
+        'Feature Set': 'Word Embeddings',
+        'Model': 'Naive Bayes',
+        'Accuracy': np.mean(result['test_accuracy']),
+        'Precision': np.mean(result['test_precision_macro']),
+        'Recall': np.mean(result['test_recall_macro']),
+        'F1-Score': np.mean(result['test_f1_macro'])
+    }
+)
+second_table.append({
+    'Feature Set': 'Word Embeddings',
+    'Model': 'Naive Bayes',
+    'Accuracy': accuracy_score(Y_test, y_pred_gnb),
+    'Precision': precision_score(Y_test, y_pred_gnb, average='macro'),
+    'Recall': recall_score(Y_test, y_pred_gnb, average='macro'),
+    'F1-Score': f1_score(Y_test, y_pred_gnb, average='macro')
+})
+
+# KNN
+knn_model_emb = KNeighborsClassifier(n_neighbors=5)
+knn_model_emb.fit(X_train_embeddings, Y_train)
+y_pred_knn_emb = knn_model_emb.predict(X_test_embeddings)
+print("KNN with Word Embeddings")
+print(classification_report(Y_test, y_pred_knn_emb, target_names=label_encoder.classes_))
+result=cross_validate(knn_model_emb, X_train_embeddings, Y_train, cv=k_fold, scoring=scoring_metrics)
+cross_table.append(
+    {
+        'Feature Set': 'Word Embeddings',
+        'Model': 'KNN',
+        'Accuracy': np.mean(result['test_accuracy']),
+        'Precision': np.mean(result['test_precision_macro']),
+        'Recall': np.mean(result['test_recall_macro']),
+        'F1-Score': np.mean(result['test_f1_macro'])
+    }
+)
+second_table.append({
+    'Feature Set': 'Word Embeddings',
+    'Model': 'KNN',
+    'Accuracy': accuracy_score(Y_test, y_pred_knn_emb),
+    'Precision': precision_score(Y_test, y_pred_knn_emb, average='macro',zero_division=0),
+    'Recall': recall_score(Y_test, y_pred_knn_emb, average='macro',zero_division=0),
+    'F1-Score': f1_score(Y_test, y_pred_knn_emb, average='macro',zero_division=0)
+})
+
+# Random Forest
+rf_model_emb = RandomForestClassifier(n_estimators=100, random_state=42,n_jobs=-1)
+rf_model_emb.fit(X_train_embeddings, Y_train)
+y_pred_rf_emb = rf_model_emb.predict(X_test_embeddings)
+print("Random Forest with Word Embeddings")
+print(classification_report(Y_test, y_pred_rf_emb, target_names=label_encoder.classes_))
+result=cross_validate(rf_model_emb, X_train_embeddings, Y_train, cv=k_fold, scoring=scoring_metrics)
+cross_table.append(
+    {
+        'Feature Set': 'Word Embeddings',
+        'Model': 'Random Forest',
+        'Accuracy': np.mean(result['test_accuracy']),
+        'Precision': np.mean(result['test_precision_macro']),
+        'Recall': np.mean(result['test_recall_macro']),
+        'F1-Score': np.mean(result['test_f1_macro'])
+    }
+)
+second_table.append({
+    'Feature Set': 'Word Embeddings',
+    'Model': 'Random Forest',
+    'Accuracy': accuracy_score(Y_test, y_pred_rf_emb),
+    'Precision': precision_score(Y_test, y_pred_rf_emb, average='macro',zero_division=0),
+    'Recall': recall_score(Y_test, y_pred_rf_emb, average='macro',zero_division=0),
+    'F1-Score': f1_score(Y_test, y_pred_rf_emb, average='macro',zero_division=0)
+})
+
+#print results of 10-fold cross validation
+cross_table_df = pd.DataFrame(cross_table)
+#display the results table for the cross validation
+print("--- 10-Fold Cross Validation Performance ---")
+
+
